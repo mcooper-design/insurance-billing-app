@@ -1,0 +1,6 @@
+streamlit
+openai==1.35.0
+pypdf
+pandas
+extract_msg
+openpyxl
