@@ -54,7 +54,7 @@ if st.button("🔥 Generate Billing Entry", type="primary"):
                 if not (filename.endswith('.eml') or filename.endswith('.msg')):
                     continue
                 try:
-                    # === Email parsing ===
+                    # Email parsing (same as before)
                     if filename.endswith('.eml'):
                         msg = email.message_from_bytes(file.getvalue(), policy=policy.default)
                         subject_line = msg.get("subject") or ""
@@ -136,35 +136,37 @@ if st.button("🔥 Generate Billing Entry", type="primary"):
                     matter_reference = extract_matter_names(subject_line) or "Unknown Matter"
                     full_text = f"SUBJECT: {subject_line}\nFROM: {from_addr}\n\n{body}\n\nATTACHMENTS:\n{attachment_text}"
 
-                    # === IMPROVED PROMPT ===
+                    # === UPDATED PROMPT ===
                     system_prompt = """You are an expert insurance-defense legal biller using LEDES 1998B + UTBMS standards.
 You ALWAYS respond with valid JSON only. Never include explanations outside the JSON."""
 
-                    user_prompt = f"""Create **ONE** billing entry for this email.
+                    user_prompt = f"""Create ONE billing entry for this email.
 
-**Priority Order:**
-1. First, determine the best **task_code** (L-code). This should be the primary focus based on the main legal work described in the email and attachments.
-2. Then, select an appropriate **activity_code** (A-code) that supports the L-code work.
+**Priority:**
+1. Choose the best **task_code** (L-code) based on the main legal work.
+2. Then choose an appropriate **activity_code** (A-code).
+
+**Important Rules for Codes:**
+- Return **ONLY the code** (example: "L310" or "A101").
+- Do **NOT** include any description or text in parentheses next to the code.
 
 Use these values:
 - date_of_service: "{service_date}"
 - matter_reference: "{matter_reference}"
 
 CRITICAL INSTRUCTIONS:
-- The L-code (task_code) should reflect the core litigation task being performed.
-- The A-code (activity_code) should be a logical supporting activity.
-- Never mention image files (jpeg, png, jpg).
+- Never mention image files.
 - For PDFs: Always include the accurate page count.
-- Max 2-3 concise sentences. No block billing. Use insurance-carrier friendly language.
+- Max 2-3 concise sentences. No block billing.
 
 REQUIRED JSON FORMAT:
 {{
   "matter_reference": "string",
   "date_of_service": "{service_date}",
   "hours": number (in 0.1 increments),
-  "activity_code": "Axxx (supporting activity)",
-  "task_code": "Lxxx (primary litigation task)",
-  "narrative": "Narrative that reflects the L-code work first..."
+  "activity_code": "Axxx",
+  "task_code": "Lxxx",
+  "narrative": "Clear narrative..."
 }}
 
 Email + Attachments:
@@ -196,11 +198,10 @@ Return ONLY the JSON object. No markdown or extra text."""
         if new_count > 0:
             st.success(f"✅ Successfully created {new_count} billing entry(ies)!")
 
-# Display section
+# Display section (with L-code before A-code)
 if st.session_state.billing_entries:
     st.subheader(f"📋 Generated Billing Entries ({len(st.session_state.billing_entries)} total)")
     
-    # Reorder columns: L-code (task_code) before A-code (activity_code)
     df = pd.DataFrame(st.session_state.billing_entries)
     column_order = ['matter_reference', 'date_of_service', 'hours', 'task_code', 'activity_code', 'narrative']
     df = df[column_order]
@@ -230,3 +231,5 @@ if st.session_state.billing_entries:
         if st.button("🆕 Clear All Entries & Start Fresh", type="secondary"):
             st.session_state.billing_entries = []
             st.rerun()
+
+st.caption("One billing entry per email. L-code shown before A-code. Clean codes only (no descriptions).")
