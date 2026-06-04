@@ -14,7 +14,6 @@ import extract_msg
 st.set_page_config(page_title="Insurance Billing Auto-Entry", layout="wide")
 st.title("📧 Email → Compliant Insurance Billing Entry (A+L LEDES/UTBMS)")
 
-# Helper: Extract ONLY names from subject line for matter name
 def extract_matter_names(subject):
     if not subject:
         return ""
@@ -32,13 +31,11 @@ if not api_key:
 
 client = OpenAI(api_key=api_key)
 
-timekeeper = st.text_input("Timekeeper Name", value="S. Michael Cooper")
-
 if "billing_entries" not in st.session_state:
     st.session_state.billing_entries = []
 
 st.subheader("🎯 Drag & drop MULTIPLE .msg or .eml emails here")
-st.caption("**Outlook tip**: Just drag the .msg files directly from Outlook — the app processes PDF, Word, and Excel attachments (ignores only jpeg/png images). Accurate PDF page counts are included. No need to save as .eml!")
+st.caption("**Outlook tip**: Just drag the .msg files directly from Outlook — the app processes PDF, Word, and Excel attachments (ignores only jpeg/png images).")
 
 uploaded_files = st.file_uploader(
     "Upload .msg or .eml email files (multiple supported)",
@@ -46,7 +43,7 @@ uploaded_files = st.file_uploader(
     type=["msg", "eml"]
 )
 
-if st.button("🔥 Generate One Compliant Entry Per Email", type="primary"):
+if st.button("🔥 Generate Billing Entry", type="primary"):
     if not uploaded_files:
         st.warning("Please upload at least one email file")
     else:
@@ -57,6 +54,7 @@ if st.button("🔥 Generate One Compliant Entry Per Email", type="primary"):
                 if not (filename.endswith('.eml') or filename.endswith('.msg')):
                     continue
                 try:
+                    # === Email parsing ===
                     if filename.endswith('.eml'):
                         msg = email.message_from_bytes(file.getvalue(), policy=policy.default)
                         subject_line = msg.get("subject") or ""
@@ -71,13 +69,9 @@ if st.button("🔥 Generate One Compliant Entry Per Email", type="primary"):
                                 elif part.get_filename():
                                     att_name = part.get_filename()
                                     ext = att_name.lower().split('.')[-1] if '.' in att_name else ''
-                                    
-                                    # Ignore only jpeg and png image files
                                     if ext in ['jpg', 'jpeg', 'png']:
                                         continue
-                                    
                                     if ext == 'pdf':
-                                        # PDF: accurate page count + full text extraction
                                         attachment_text += f"\n--- PDF ATTACHMENT: {att_name} ---\n"
                                         try:
                                             pdf_data = io.BytesIO(part.get_payload(decode=True))
@@ -89,7 +83,6 @@ if st.button("🔥 Generate One Compliant Entry Per Email", type="primary"):
                                         except:
                                             attachment_text += "[PDF text could not be extracted]\n"
                                     else:
-                                        # Word, Excel, or other allowed attachments - reference by name/type
                                         attachment_text += f"\n--- ATTACHMENT: {att_name} ({ext.upper()} file) ---\n"
                                         try:
                                             content = part.get_payload(decode=True)
@@ -108,25 +101,13 @@ if st.button("🔥 Generate One Compliant Entry Per Email", type="primary"):
                         body = outlook_msg.body or ""
                         attachment_text = ""
                         for att in outlook_msg.attachments:
-                            att_name = (
-                                getattr(att, 'filename', None) or
-                                getattr(att, 'longFilename', None) or
-                                getattr(att, 'shortFilename', None) or
-                                getattr(att, 'name', None) or
-                                getattr(att, 'displayName', None) or
-                                'Unknown_Attachment'
-                            )
+                            att_name = getattr(att, 'filename', None) or getattr(att, 'longFilename', None) or 'Unknown'
                             if not att_name:
                                 continue
-                            
                             ext = str(att_name).lower().split('.')[-1] if '.' in str(att_name) else ''
-                            
-                            # Ignore only jpeg and png image files
                             if ext in ['jpg', 'jpeg', 'png']:
                                 continue
-                            
                             if ext == 'pdf' and hasattr(att, 'data') and att.data:
-                                # PDF: accurate page count + full text extraction
                                 attachment_text += f"\n--- PDF ATTACHMENT: {att_name} ---\n"
                                 try:
                                     pdf_reader = pypdf.PdfReader(io.BytesIO(att.data))
@@ -137,64 +118,60 @@ if st.button("🔥 Generate One Compliant Entry Per Email", type="primary"):
                                 except:
                                     attachment_text += "[PDF text could not be extracted]\n"
                             else:
-                                # Word, Excel, or other allowed attachments - reference by name/type
                                 attachment_text += f"\n--- ATTACHMENT: {att_name} ({ext.upper()} file) ---\n"
                                 try:
                                     if hasattr(att, 'data') and att.data:
                                         attachment_text += str(att.data)[:2500] + "\n"
                                 except:
                                     attachment_text += "[Attachment content not extracted]\n"
-                    # Get real email date as service date (or today fallback)
+
                     service_date = date.today()
                     if email_date_str:
                         try:
-                            if isinstance(email_date_str, str):
-                                dt = parsedate_to_datetime(email_date_str)
-                            else:
-                                dt = email_date_str
+                            dt = parsedate_to_datetime(email_date_str) if isinstance(email_date_str, str) else email_date_str
                             service_date = dt.date()
                         except:
                             pass
+
                     matter_reference = extract_matter_names(subject_line) or "Unknown Matter"
                     full_text = f"SUBJECT: {subject_line}\nFROM: {from_addr}\n\n{body}\n\nATTACHMENTS:\n{attachment_text}"
-                    # Strong prompt for insurance-defense compliant narratives
+
+                    # === IMPROVED PROMPT ===
                     system_prompt = """You are an expert insurance-defense legal biller using LEDES 1998B + UTBMS standards.
 You ALWAYS respond with valid JSON only. Never include explanations outside the JSON."""
-                    user_prompt = f"""Create ONE perfect daily time entry for insurance defense billing.
-Use these exact values:
-- timekeeper: "{timekeeper}"
+
+                    user_prompt = f"""Create **ONE** billing entry for this email.
+
+**Priority Order:**
+1. First, determine the best **task_code** (L-code). This should be the primary focus based on the main legal work described in the email and attachments.
+2. Then, select an appropriate **activity_code** (A-code) that supports the L-code work.
+
+Use these values:
 - date_of_service: "{service_date}"
 - matter_reference: "{matter_reference}"
 
-CRITICAL INSTRUCTIONS FOR NARRATIVE (must follow exactly):
-- Start with a strong action verb (e.g., "Reviewed", "Analyzed", "Drafted", "Corresponded with").
-- Reference PDF, Word, and Excel attachments when relevant to the work performed. Never mention or describe jpeg, png, or other image files.
-- For PDFs: ALWAYS use the accurate page count provided (e.g., "Reviewed the 14-page medical records PDF from Dr. Smith"). The page count is exact, not estimated.
-- For Word/Excel attachments: Reference them by filename and type when they are relevant (e.g., "the attached settlement agreement.docx" or "the Excel damages spreadsheet").
-- Be highly specific to the email subject, body, and allowed attachment contents.
-- Max 2-3 concise sentences. NO block billing. Use insurance-carrier friendly language.
-- Focus on the legal work performed and its purpose for the defense.
+CRITICAL INSTRUCTIONS:
+- The L-code (task_code) should reflect the core litigation task being performed.
+- The A-code (activity_code) should be a logical supporting activity.
+- Never mention image files (jpeg, png, jpg).
+- For PDFs: Always include the accurate page count.
+- Max 2-3 concise sentences. No block billing. Use insurance-carrier friendly language.
 
-UTBMS CODE SUGGESTIONS (required):
-- Carefully analyze the full email content (subject, body, and any PDF/Word/Excel text).
-- Select the SINGLE most appropriate activity_code (A-series) and task_code (L-series) that best match the actual legal work described in THIS email.
-- Base your code choices strictly on the specific tasks performed (research, drafting, correspondence, document review, etc.). Use the most specific fitting code rather than generic defaults.
-
-REQUIRED JSON FORMAT (exact keys):
+REQUIRED JSON FORMAT:
 {{
-  "matter_reference": "string (from subject or Unknown Matter)",
+  "matter_reference": "string",
   "date_of_service": "{service_date}",
-  "timekeeper": "{timekeeper}",
-  "hours": number (in 0.1 increments, e.g. 0.5 or 1.2),
-  "activity_code": "Best matching UTBMS activity code based on content",
-  "task_code": "Best matching UTBMS task code based on content",
-  "narrative": "Detailed, compliant narrative here..."
+  "hours": number (in 0.1 increments),
+  "activity_code": "Axxx (supporting activity)",
+  "task_code": "Lxxx (primary litigation task)",
+  "narrative": "Narrative that reflects the L-code work first..."
 }}
 
-Email + FULL Attachment Content:
+Email + Attachments:
 {full_text[:25000]}
 
-Return ONLY the JSON object. No markdown, no extra text."""
+Return ONLY the JSON object. No markdown or extra text."""
+
                     response = client.chat.completions.create(
                         model="gpt-4o",
                         messages=[
@@ -204,33 +181,37 @@ Return ONLY the JSON object. No markdown, no extra text."""
                         temperature=0.2,
                         response_format={"type": "json_object"}
                     )
+                    
                     result = json.loads(response.choices[0].message.content.strip())
-                    # Basic validation
+                    
                     if "narrative" in result and "hours" in result:
                         st.session_state.billing_entries.append(result)
                         new_count += 1
                     else:
                         st.warning(f"AI response missing required fields for {file.name}")
+
                 except Exception as e:
                     st.error(f"Error processing {file.name}: {str(e)}")
+
         if new_count > 0:
-            st.success(f"✅ Successfully created {new_count} new compliant billing entries!")
-        else:
-            st.info("No valid .msg or .eml files were processed.")
+            st.success(f"✅ Successfully created {new_count} billing entry(ies)!")
 
 # Display section
 if st.session_state.billing_entries:
     st.subheader(f"📋 Generated Billing Entries ({len(st.session_state.billing_entries)} total)")
     
-    # Use data_editor for easy inline editing (newer Streamlit feature)
+    # Reorder columns: L-code (task_code) before A-code (activity_code)
+    df = pd.DataFrame(st.session_state.billing_entries)
+    column_order = ['matter_reference', 'date_of_service', 'hours', 'task_code', 'activity_code', 'narrative']
+    df = df[column_order]
+    
     edited_df = st.data_editor(
-        pd.DataFrame(st.session_state.billing_entries),
+        df,
         use_container_width=True,
         num_rows="dynamic",
         key="billing_editor"
     )
     
-    # Update session state if edited
     if st.button("💾 Save Edits to Current Batch"):
         st.session_state.billing_entries = edited_df.to_dict("records")
         st.success("Edits saved!")
@@ -239,25 +220,13 @@ if st.session_state.billing_entries:
     col1, col2, col3 = st.columns(3)
     with col1:
         csv = edited_df.to_csv(index=False)
-        st.download_button(
-            "📥 Download as CSV",
-            csv,
-            file_name=f"insurance_billing_{date.today()}.csv",
-            mime="text/csv"
-        )
+        st.download_button("📥 Download as CSV", csv, file_name=f"insurance_billing_{date.today()}.csv", mime="text/csv")
     with col2:
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
             edited_df.to_excel(writer, index=False, sheet_name="Billing Entries")
-        st.download_button(
-            "📥 Download as Excel",
-            buffer.getvalue(),
-            file_name=f"insurance_billing_{date.today()}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        st.download_button("📥 Download as Excel", buffer.getvalue(), file_name=f"insurance_billing_{date.today()}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     with col3:
         if st.button("🆕 Clear All Entries & Start Fresh", type="secondary"):
             st.session_state.billing_entries = []
             st.rerun()
-
-st.caption("Creates daily time entries compliant with insurance company guidelines (LEDES 1998B / UTBMS). Processes PDF/Word/Excel attachments (ignores jpeg/png images). Accurate PDF page counts + intelligent UTBMS code suggestions. Optimized for carriers like Travelers, AmTrust, etc.")
