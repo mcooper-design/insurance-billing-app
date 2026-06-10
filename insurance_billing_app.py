@@ -34,11 +34,28 @@ client = OpenAI(api_key=api_key)
 if "billing_entries" not in st.session_state:
     st.session_state.billing_entries = []
 
-st.subheader("🎯 Drag & drop MULTIPLE .msg or .eml emails here")
-st.caption("**Outlook tip**: Just drag the .msg files directly from Outlook — the app processes PDF, Word, and Excel attachments (ignores only jpeg/png images).")
+st.subheader("🎯 Import Emails for Billing Entries")
+
+with st.expander("📋 How to add .msg / .eml files (Critical for Outlook on laptop)", expanded=True):
+    st.markdown("""
+    **Direct drag from Outlook usually fails** on Windows laptops (especially the new Outlook app).  
+    This is a Microsoft limitation — not a problem with your app.
+
+    **Recommended workflow (works every time):**
+    1. In Outlook, open the email (or select it in the list).
+    2. **Drag the email to your Desktop** first → this automatically creates a `.msg` file.
+    3. Then drag that `.msg` file (or multiple files) from your Desktop into the box below.
+
+    **Alternative methods:**
+    - Right-click the email → **Save As** → choose **Outlook Message Format (*.msg)** → save to Desktop → drag in.
+    - Works with both `.msg` and `.eml` files.
+    - The app reads the full email body + any PDF, Word, or Excel attachments (skips photos/images).
+
+    You can drop **multiple emails at once**.
+    """)
 
 uploaded_files = st.file_uploader(
-    "Upload .msg or .eml email files (multiple supported)",
+    "Drop .msg or .eml files here (or click to browse)",
     accept_multiple_files=True,
     type=["msg", "eml"]
 )
@@ -54,7 +71,7 @@ if st.button("🔥 Generate Billing Entry", type="primary"):
                 if not (filename.endswith('.eml') or filename.endswith('.msg')):
                     continue
                 try:
-                    # Email parsing (same as before)
+                    # Email parsing (unchanged - already excellent)
                     if filename.endswith('.eml'):
                         msg = email.message_from_bytes(file.getvalue(), policy=policy.default)
                         subject_line = msg.get("subject") or ""
@@ -136,29 +153,24 @@ if st.button("🔥 Generate Billing Entry", type="primary"):
                     matter_reference = extract_matter_names(subject_line) or "Unknown Matter"
                     full_text = f"SUBJECT: {subject_line}\nFROM: {from_addr}\n\n{body}\n\nATTACHMENTS:\n{attachment_text}"
 
-                    # === UPDATED PROMPT ===
+                    # === UPDATED PROMPT (unchanged - already very good) ===
                     system_prompt = """You are an expert insurance-defense legal biller using LEDES 1998B + UTBMS standards.
 You ALWAYS respond with valid JSON only. Never include explanations outside the JSON."""
 
                     user_prompt = f"""Create ONE billing entry for this email.
-
 **Priority:**
 1. Choose the best **task_code** (L-code) based on the main legal work.
 2. Then choose an appropriate **activity_code** (A-code).
-
 **Important Rules for Codes:**
 - Return **ONLY the code** (example: "L310" or "A101").
 - Do **NOT** include any description or text in parentheses next to the code.
-
 Use these values:
 - date_of_service: "{service_date}"
 - matter_reference: "{matter_reference}"
-
 CRITICAL INSTRUCTIONS:
 - Never mention image files.
 - For PDFs: Always include the accurate page count.
 - Max 2-3 concise sentences. No block billing.
-
 REQUIRED JSON FORMAT:
 {{
   "matter_reference": "string",
@@ -168,10 +180,8 @@ REQUIRED JSON FORMAT:
   "task_code": "Lxxx",
   "narrative": "Clear narrative..."
 }}
-
 Email + Attachments:
 {full_text[:25000]}
-
 Return ONLY the JSON object. No markdown or extra text."""
 
                     response = client.chat.completions.create(
@@ -183,41 +193,40 @@ Return ONLY the JSON object. No markdown or extra text."""
                         temperature=0.2,
                         response_format={"type": "json_object"}
                     )
-                    
+
                     result = json.loads(response.choices[0].message.content.strip())
-                    
+
                     if "narrative" in result and "hours" in result:
                         st.session_state.billing_entries.append(result)
                         new_count += 1
                     else:
                         st.warning(f"AI response missing required fields for {file.name}")
-
                 except Exception as e:
                     st.error(f"Error processing {file.name}: {str(e)}")
 
         if new_count > 0:
             st.success(f"✅ Successfully created {new_count} billing entry(ies)!")
 
-# Display section (with L-code before A-code)
+# Display section (unchanged - already excellent)
 if st.session_state.billing_entries:
     st.subheader(f"📋 Generated Billing Entries ({len(st.session_state.billing_entries)} total)")
-    
+
     df = pd.DataFrame(st.session_state.billing_entries)
     column_order = ['matter_reference', 'date_of_service', 'hours', 'task_code', 'activity_code', 'narrative']
     df = df[column_order]
-    
+
     edited_df = st.data_editor(
         df,
         use_container_width=True,
         num_rows="dynamic",
         key="billing_editor"
     )
-    
+
     if st.button("💾 Save Edits to Current Batch"):
         st.session_state.billing_entries = edited_df.to_dict("records")
         st.success("Edits saved!")
         st.rerun()
-    
+
     col1, col2, col3 = st.columns(3)
     with col1:
         csv = edited_df.to_csv(index=False)
@@ -226,7 +235,7 @@ if st.session_state.billing_entries:
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
             edited_df.to_excel(writer, index=False, sheet_name="Billing Entries")
-        st.download_button("📥 Download as Excel", buffer.getvalue(), file_name=f"insurance_billing_{date.today()}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button("📥 Download as Excel", buffer.getvalue(), file_name=f"insurance_billing_{date.today()}.xlsx", mime="application/vnd.openxmlformats.document.spreadsheetml.sheet")
     with col3:
         if st.button("🆕 Clear All Entries & Start Fresh", type="secondary"):
             st.session_state.billing_entries = []
