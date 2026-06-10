@@ -240,5 +240,105 @@ if st.session_state.billing_entries:
         if st.button("🆕 Clear All Entries & Start Fresh", type="secondary"):
             st.session_state.billing_entries = []
             st.rerun()
+      # ============================================================
+# NEW: One-click import directly from Outlook (Windows only)
+# ============================================================
+st.markdown("---")
+st.subheader("📥 Or import directly from Outlook (no drag, no Save As)")
+
+if st.button("📥 Import Currently Selected Email from Outlook", type="secondary"):
+    try:
+        import win32com.client
+        import tempfile
+        import os
+
+        outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+        explorer = outlook.Application.ActiveExplorer()
+        inspector = outlook.Application.ActiveInspector()
+
+        mail_item = None
+
+        # Try to get the email from the currently open inspector first
+        if inspector is not None and inspector.CurrentItem.Class == 43:  # olMail
+            mail_item = inspector.CurrentItem
+        # Otherwise get the selected item in the explorer
+        elif explorer is not None and explorer.Selection.Count > 0:
+            selected = explorer.Selection.Item(1)
+            if selected.Class == 43:  # olMail
+                mail_item = selected
+
+        if mail_item is None:
+            st.warning("No email selected or open in Outlook. Please select or open an email in Outlook first.")
+        else:
+            with st.spinner("Importing email from Outlook..."):
+                # Save the email to a temporary .msg file (most reliable way)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".msg") as tmp:
+                    temp_path = tmp.name
+
+                mail_item.SaveAs(temp_path, 3)  # 3 = olMSG format
+
+                # Reuse the exact same parsing we already have for .msg files
+                outlook_msg = extract_msg.Message(temp_path)
+                subject_line = outlook_msg.subject or ""
+                from_addr = outlook_msg.sender or ""
+                email_date_str = outlook_msg.date
+                body = outlook_msg.body or ""
+                attachment_text = ""
+
+                for att in outlook_msg.attachments:
+                    att_name = getattr(att, 'filename', None) or getattr(att, 'longFilename', None) or 'Unknown'
+                    if not att_name:
+                        continue
+                    ext = str(att_name).lower().split('.')[-1] if '.' in str(att_name) else ''
+                    if ext in ['jpg', 'jpeg', 'png']:
+                        continue
+                    if ext == 'pdf' and hasattr(att, 'data') and att.data:
+                        attachment_text += f"\n--- PDF ATTACHMENT: {att_name} ---\n"
+                        try:
+                            pdf_reader = pypdf.PdfReader(io.BytesIO(att.data))
+                            page_count = len(pdf_reader.pages)
+                            attachment_text += f"PDF - {page_count} pages (accurate count)\n"
+                            for i, page in enumerate(pdf_reader.pages, 1):
+                                attachment_text += f"\n--- Page {i} ---\n{page.extract_text() or ''}\n"
+                        except:
+                            attachment_text += "[PDF text could not be extracted]\n"
+                    else:
+                        attachment_text += f"\n--- ATTACHMENT: {att_name} ({ext.upper()} file) ---\n"
+                        try:
+                            if hasattr(att, 'data') and att.data:
+                                attachment_text += str(att.data)[:2500] + "\n"
+                        except:
+                            attachment_text += "[Attachment content not extracted]\n"
+
+                # Clean up temp file
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
+
+                service_date = date.today()
+                if email_date_str:
+                    try:
+                        dt = parsedate_to_datetime(email_date_str) if isinstance(email_date_str, str) else email_date_str
+                        service_date = dt.date()
+                    except:
+                        pass
+
+                matter_reference = extract_matter_names(subject_line) or "Outlook Import"
+                full_text = f"SUBJECT: {subject_line}\nFROM: {from_addr}\n\n{body}\n\nATTACHMENTS:\n{attachment_text}"
+
+                result = process_email_to_billing_entry(client, full_text, service_date, matter_reference, "Outlook Import")
+
+                if "narrative" in result and "hours" in result:
+                    st.session_state.billing_entries.append(result)
+                    st.success("✅ Email imported directly from Outlook and billing entry created!")
+                else:
+                    st.warning("AI response was incomplete.")
+
+    except ImportError:
+        st.error("pywin32 is not installed. Please run: pip install pywin32")
+    except Exception as e:
+        st.error(f"Could not import from Outlook: {str(e)}")
+        st.info("Make sure Outlook is running and you have an email selected or open.")
 
 st.caption("One billing entry per email. L-code shown before A-code. Clean codes only (no descriptions).")
