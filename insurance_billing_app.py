@@ -26,7 +26,6 @@ def extract_matter_names(subject):
     return " ".join(names) if names else ""
 
 def process_email_to_billing_entry(client, full_text, service_date, matter_reference, source_name="email"):
-    """Single place for the AI call (avoids duplication)"""
     system_prompt = """You are an expert insurance-defense legal biller using LEDES 1998B + UTBMS standards.
 You ALWAYS respond with valid JSON only. Never include explanations outside the JSON."""
 
@@ -84,16 +83,15 @@ st.subheader("🎯 Import Emails for Billing Entries")
 
 with st.expander("📋 How to add .msg / .eml files (Critical for Outlook on laptop)", expanded=True):
     st.markdown("""
-    **Direct drag from Outlook usually fails** on Windows laptops (especially the new Outlook app).  
-    This is a Microsoft limitation — not a problem with your app.
+    **Recommended workflow (keeps your Desktop clean):**
 
-    **Recommended workflow (works every time):**
-    1. In Outlook, open the email (or select it in the list).
-    2. **Drag the email to your Desktop** first → this automatically creates a `.msg` file.
-    3. Then drag that `.msg` file (or multiple files) from your Desktop into the box below.
+    1. Create a folder on your Desktop called **`Billing_Emails`** (do this once).
+    2. In Outlook, drag the email(s) into the `Billing_Emails` folder → this creates the `.msg` file there.
+    3. Drag the `.msg` file(s) from that folder into the box below.
+    4. After the app processes the emails, simply delete the files from the `Billing_Emails` folder.
 
     **Alternative methods:**
-    - Right-click the email → **Save As** → choose **Outlook Message Format (*.msg)** → save to Desktop → drag in.
+    - Right-click the email → **Save As** → choose **Outlook Message Format (*.msg)** → save into your `Billing_Emails` folder.
     - Works with both `.msg` and `.eml` files.
     - The app reads the full email body + any PDF, Word, or Excel attachments (skips photos/images).
 
@@ -107,18 +105,7 @@ uploaded_files = st.file_uploader(
     type=["msg", "eml"]
 )
 
-st.markdown("---")
-
-# === PASTE FALLBACK ===
-st.subheader("📝 Or paste email content (fallback)")
-pasted_content = st.text_area(
-    "Paste the full email here (subject, from, date, body + attachment text)",
-    height=160,
-    placeholder="SUBJECT: ...\nFROM: ...\nDATE: ...\n\nBody text here...\n\n--- PDF ATTACHMENT: motion.pdf ---\nPage content...",
-    key="pasted_email"
-)
-
-# === OUTLOOK DIRECT IMPORT (only on Windows) ===
+# === OUTLOOK DIRECT IMPORT (only appears on Windows) ===
 can_import_from_outlook = False
 if platform.system() == "Windows":
     try:
@@ -214,11 +201,10 @@ if can_import_from_outlook:
         except Exception as e:
             st.error(f"Could not import from Outlook: {str(e)}")
 
-# === GENERATE BUTTON (handles files + paste) ===
+# === GENERATE BUTTON ===
 if st.button("🔥 Generate Billing Entry", type="primary"):
     new_count = 0
 
-    # Process uploaded files
     if uploaded_files:
         with st.spinner("AI is analyzing uploaded email(s) + attachments..."):
             for file in uploaded_files:
@@ -316,32 +302,6 @@ if st.button("🔥 Generate Billing Entry", type="primary"):
 
                 except Exception as e:
                     st.error(f"Error processing {file.name}: {str(e)}")
-
-    # Process pasted content
-    if pasted_content and pasted_content.strip():
-        with st.spinner("AI is analyzing pasted email..."):
-            try:
-                subject_line = ""
-                from_addr = ""
-                for line in pasted_content.split('\n')[:15]:
-                    lower = line.lower().strip()
-                    if lower.startswith("subject:"):
-                        subject_line = line.split(":", 1)[1].strip()
-                    elif lower.startswith("from:"):
-                        from_addr = line.split(":", 1)[1].strip()
-
-                service_date = date.today()
-                matter_reference = extract_matter_names(subject_line) or "Pasted Email"
-                full_text = pasted_content
-
-                result = process_email_to_billing_entry(client, full_text, service_date, matter_reference, "pasted")
-                if "narrative" in result and "hours" in result:
-                    st.session_state.billing_entries.append(result)
-                    new_count += 1
-                else:
-                    st.warning("AI response missing required fields for pasted email")
-            except Exception as e:
-                st.error(f"Error processing pasted email: {str(e)}")
 
     if new_count > 0:
         st.success(f"✅ Successfully created {new_count} billing entry(ies)!")
